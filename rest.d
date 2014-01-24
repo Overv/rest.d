@@ -16,7 +16,7 @@ import std.regex;
 /**
  * Request handler function.
  */
-alias string function(Request) RequestHandler;
+alias Response function(Request) RequestHandler;
 
 /**
  * Representation of a unique connection along with its state.
@@ -37,9 +37,10 @@ private class Connection {
 }
 
 /**
- * Representation of a HTTP request.
+ * Representation of an HTTP request.
  */
 class Request {
+    Address ip;
     string method;
     string fullPath;
 
@@ -57,8 +58,8 @@ class Request {
      * Parse raw request into a structure.
      * Throws: Exception on bad request.
      */
-    private this(ubyte[] buffer) {
-        string raw = cast(string) buffer;
+    private this(Connection conn) {
+        string raw = cast(string) conn.buffer;
         string[] lines = raw.split("\r\n");
 
         // Request line, host header and empty line (splits to 4)
@@ -68,6 +69,7 @@ class Request {
         auto reqLine = match(lines[0], requestLineRegex);
         enforce(reqLine, "Malformed request line");
 
+        ip = conn.socket.remoteAddress;
         method = reqLine.captures[1].toLower;
         fullPath = reqLine.captures[2];
 
@@ -106,6 +108,38 @@ class Request {
 
         // HTTP/1.1 requires the Host header
         enforce("host" in headers, "Missing required Host header");
+    }
+
+    /**
+     * Checks if a buffer contains a complete request.
+     */
+    private static bool isCompleteRequest(ubyte[] buffer) {
+        return buffer.length >= 4 && buffer[$-4..$] == "\r\n\r\n";
+    }
+}
+
+/**
+ * HTTP response status codes.
+ */
+enum StatusCode {
+    OK = 200,
+    NotFound = 404,
+    InternalServerError = 500
+}
+
+/**
+ * Representation of an HTTP response.
+ */
+struct Response {
+    private string response = "";
+    private int status = StatusCode.OK;
+
+    /**
+     * Create a response by serializing an object to a string with to!string.
+     */
+    this(T)(T response, StatusCode status = StatusCode.OK) {
+        this.response = to!string(response);
+        this.status = status;
     }
 }
 
@@ -228,7 +262,7 @@ class HttpServer {
                         }
 
                         // Handle request if buffer contains full request
-                        if (isCompleteRequest(conn.buffer)) {
+                        if (Request.isCompleteRequest(conn.buffer)) {
                             handleRequest(conn);
 
                             conn.socket.close();
@@ -246,20 +280,13 @@ class HttpServer {
     }
 
     /**
-     * Checks if a buffer contains a complete request.
-     */
-    private bool isCompleteRequest(ubyte[] buffer) {
-        return buffer.length >= 4 && buffer[$-4..$] == "\r\n\r\n";
-    }
-
-    /**
      * Respond to a request sent by a client.
      */
     private void handleRequest(Connection conn) {
         // Attempt to parse request
         Request req;
         try {
-            req = new Request(conn.buffer);
+            req = new Request(conn);
         } catch (Exception e) {
             conn.socket.send("HTTP/1.1 400 Bad Request\r\n\r\n");
             return;
@@ -269,8 +296,8 @@ class HttpServer {
         RequestHandler* handler = req.path in getHandlers;
 
         if (handler) {
-            string response = (*handler)(req);
-            conn.socket.send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " ~ to!string(response.length) ~"\r\n\r\n" ~ response);
+            Response res = (*handler)(req);
+            conn.socket.send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " ~ to!string(res.response.length) ~"\r\n\r\n" ~ res.response);
         } else {
             conn.socket.send("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 10\r\n\r\nNot found!");
         }

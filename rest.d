@@ -121,7 +121,7 @@ class Request {
 /**
  * HTTP response status codes.
  */
-enum StatusCode {
+enum Status {
     OK = 200,
     BadRequest = 400,
     NotFound = 404,
@@ -132,13 +132,13 @@ enum StatusCode {
 /**
  * Get the text corresponding to a status code.
  */
-private  string statusText(StatusCode code) {
+private  string statusText(Status code) {
     switch (code) {
-        case StatusCode.OK: return "OK";
-        case StatusCode.BadRequest: return "Bad Request";
-        case StatusCode.NotFound: return "Not Found";
-        case StatusCode.InternalServerError: return "Internal Server Error";
-        case StatusCode.NotImplemented: return "Not Implemented";
+        case Status.OK: return "OK";
+        case Status.BadRequest: return "Bad Request";
+        case Status.NotFound: return "Not Found";
+        case Status.InternalServerError: return "Internal Server Error";
+        case Status.NotImplemented: return "Not Implemented";
         default: return "";
     }
 }
@@ -148,12 +148,12 @@ private  string statusText(StatusCode code) {
  */
 struct Response {
     private string response = "";
-    private StatusCode status = StatusCode.OK;
+    private Status status = Status.OK;
 
     /**
      * Create a response by serializing an object to a string with to!string.
      */
-    this(T)(T response, StatusCode status = StatusCode.OK) {
+    this(T)(T response, Status status = Status.OK) {
         this.response = to!string(response);
         this.status = status;
     }
@@ -161,7 +161,7 @@ struct Response {
     /**
      * Create an empty response (for example appropriate for bad request).
      */
-    this(StatusCode status) {
+    this(Status status) {
         this.response = "";
         this.status = status;
     }
@@ -176,9 +176,11 @@ struct Response {
         msg ~= "Content-Type: text/plain\r\n";
 
         // If request was HEAD, don't send response body
-        if (!head) {
+        if (!head && response.length > 0) {
             msg ~= "Content-Length: " ~ to!string(response.length) ~ "\r\n\r\n";
             msg ~= response;
+        } else {
+            msg ~= "\r\n";
         }
 
         return msg;
@@ -330,7 +332,7 @@ class HttpServer {
         try {
             req = new Request(conn);
         } catch (Exception e) {
-            conn.socket.send(Response(StatusCode.BadRequest).generate);
+            conn.socket.send(Response(Status.BadRequest).generate);
             return;
         }
 
@@ -340,10 +342,16 @@ class HttpServer {
         if (req.method in handlers) handler = req.path in handlers[req.method];
 
         // If there is no handler, return a not found error
-        if (handler)
-            res = (*handler)(req);
-        else
-            res = Response("Not found!", StatusCode.NotFound);
+        if (handler) {
+            // If the handler fails, recover with an internal server error
+            try {
+                res = (*handler)(req);
+            } catch (Error e) {
+                res = Response(Status.InternalServerError);
+            }
+        } else {
+            res = Response("Not found!", Status.NotFound);
+        }
 
         conn.socket.send(res.generate(req.method == "head"));
     }
@@ -375,5 +383,15 @@ class HttpServer {
      */
     void del(string path, RequestHandler handler) {
         handlers["delete"][path] = handler;
+    }
+
+    /**
+     * Add a handler for any method.
+     */
+    void request(string path, RequestHandler handler) {
+        get(path, handler);
+        post(path, handler);
+        put(path, handler);
+        del(path, handler);
     }
 }

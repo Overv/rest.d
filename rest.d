@@ -50,7 +50,7 @@ class Request {
     // Field names are always lower case, e.g. content-length
     string[string] headers;
 
-    private static enum requestLineRegex = ctRegex!(`^(GET) (/[^ ]+) HTTP/1\.1$`);
+    private static enum requestLineRegex = ctRegex!(`^(GET) (/[^ ]*) HTTP/1\.1$`);
     private static enum pathRegex = ctRegex!(`^/([^?#]*)`);
     private static enum queryRegex = ctRegex!(`^/[^?]*\?([^#]*)`);
 
@@ -130,11 +130,25 @@ enum StatusCode {
 }
 
 /**
+ * Get the text corresponding to a status code.
+ */
+private  string statusText(StatusCode code) {
+    switch (code) {
+        case StatusCode.OK: return "OK";
+        case StatusCode.BadRequest: return "Bad Request";
+        case StatusCode.NotFound: return "Not Found";
+        case StatusCode.InternalServerError: return "Internal Server Error";
+        case StatusCode.NotImplemented: return "Not Implemented";
+        default: return "";
+    }
+}
+
+/**
  * Representation of an HTTP response.
  */
 struct Response {
     private string response = "";
-    private int status = StatusCode.OK;
+    private StatusCode status = StatusCode.OK;
 
     /**
      * Create a response by serializing an object to a string with to!string.
@@ -158,7 +172,7 @@ struct Response {
     private string generate() {
         string msg = "";
 
-        msg ~= "HTTP/1.1 " ~ to!string(status) ~ " Todo\r\n";
+        msg ~= "HTTP/1.1 " ~ to!string(cast(int) status) ~ " " ~ statusText(status) ~ "\r\n";
         msg ~= "Content-Type: text/plain\r\n";
         msg ~= "Content-Length: " ~ to!string(response.length) ~ "\r\n\r\n";
         msg ~= response;

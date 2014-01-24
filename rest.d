@@ -12,6 +12,8 @@ import std.array;
 import std.string;
 import std.conv;
 import std.regex;
+import std.zlib;
+import std.uri;
 
 /**
  * Request handler function.
@@ -74,7 +76,7 @@ class Request {
         fullPath = reqLine.captures[2];
 
         // Extract actual path
-        path = match(fullPath, pathRegex).captures[1];
+        path = decode(match(fullPath, pathRegex).captures[1]);
 
         // Parse query variables
         auto q = match(fullPath, queryRegex);
@@ -87,9 +89,14 @@ class Request {
 
                 // Accept formats a=b/a=b=c=d/a
                 if (parts.length == 1) {
-                    query[parts[0]] = "";
+                    string key = decode(parts[0]);
+
+                    query[key] = "";
                 } else if (parts.length > 1) {
-                    query[parts[0]] = pair[parts[0].length + 1..$];
+                    string key = decode(parts[0]);
+                    string value = decode(pair[parts[0].length + 1..$]);
+
+                    query[key] = value;
                 }
             }
         }
@@ -192,6 +199,7 @@ struct Response {
  *
  * TODO:
  * - Support gzip compression
+ * - Support adding headers to response
  * - Support request body
  * - Support keep-alive (default unless Connection: close is specified)
  * - Support JSON serialization

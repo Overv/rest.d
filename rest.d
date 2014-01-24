@@ -50,13 +50,19 @@ private class Request {
 
     /**
      * Parse raw request into a structure.
+     * Throws: Exception on bad request.
      */
     this(ubyte[] buffer) {
         string raw = cast(string) buffer;
         string[] lines = raw.split("\r\n");
 
+        // Request line, host header and empty line (splits to 4)
+        enforce(lines.length >= 4, "Incomplete request");
+
         // Parse request line
         auto reqLine = match(lines[0], requestLineRegex);
+        enforce(reqLine, "Malformed request line");
+
         method = reqLine.captures[1].toLower;
         path = reqLine.captures[2][1..$];
 
@@ -64,11 +70,16 @@ private class Request {
         foreach (string line; lines[1..$-2]) {
             string[] parts = line.split(":");
 
+            enforce(parts.length >= 2, "Malformed header line");
+
             string key = parts[0].strip.toLower;
-            string value = parts[1].strip;
+            string value = line[parts[0].length + 1..$].strip;
 
             headers[key] = value;
         }
+
+        // HTTP/1.1 requires the Host header
+        enforce("host" in headers, "Missing required Host header");
     }
 }
 
@@ -76,14 +87,11 @@ private class Request {
  * A single-threaded HTTP 1.1 server handling requests for specified callbacks.
  *
  * TODO:
- * - Handle malformed requests (No host header, bad request line)
- * - Allow HTTP/1.0 requests (Drop host header requirement)
  * - Support request body
- * - Support keep-alive
+ * - Support keep-alive (default unless Connection: close is specified)
  * - Support chunked transfer encoding from clients
  * - Support more than FD_SETSIZE concurrent connections (multiple select calls)
  * - Support POST/HEAD/PUT/DELETE, return 501 for other types
- * - Support omitting \r for newlines
  */
 class HttpServer {
     private Socket listener;
@@ -222,8 +230,16 @@ class HttpServer {
      * Respond to a request sent by a client.
      */
     private void handleRequest(Connection conn) {
-        Request req = new Request(conn.buffer);
+        // Attempt to parse request
+        Request req;
+        try {
+            req = new Request(conn.buffer);
+        } catch (Exception e) {
+            conn.socket.send("HTTP/1.1 400 Bad Request\r\n\r\n");
+            return;
+        }
 
+        // Find matching handler to create response
         RequestHandler* handler = req.path in getHandlers;
 
         if (handler) {

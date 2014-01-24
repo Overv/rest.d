@@ -50,7 +50,7 @@ class Request {
     // Field names are always lower case, e.g. content-length
     string[string] headers;
 
-    private static enum requestLineRegex = ctRegex!(`^(GET) (/[^ ]*) HTTP/1\.1$`);
+    private static enum requestLineRegex = ctRegex!(`^(GET|POST|PUT|DELETE|HEAD) (/[^ ]*) HTTP/1\.1$`);
     private static enum pathRegex = ctRegex!(`^/([^?#]*)`);
     private static enum queryRegex = ctRegex!(`^/[^?]*\?([^#]*)`);
 
@@ -169,13 +169,17 @@ struct Response {
     /**
      * Turn the response into a HTTP response.
      */
-    private string generate() {
+    private string generate(bool head = false) {
         string msg = "";
 
         msg ~= "HTTP/1.1 " ~ to!string(cast(int) status) ~ " " ~ statusText(status) ~ "\r\n";
         msg ~= "Content-Type: text/plain\r\n";
-        msg ~= "Content-Length: " ~ to!string(response.length) ~ "\r\n\r\n";
-        msg ~= response;
+
+        // If request was HEAD, don't send response body
+        if (!head) {
+            msg ~= "Content-Length: " ~ to!string(response.length) ~ "\r\n\r\n";
+            msg ~= response;
+        }
 
         return msg;
     }
@@ -185,10 +189,10 @@ struct Response {
  * A single-threaded HTTP 1.1 server handling requests for specified callbacks.
  *
  * TODO:
- * - Support POST/HEAD/PUT/DELETE, return 501 for other types
  * - Support gzip compression
  * - Support request body
  * - Support keep-alive (default unless Connection: close is specified)
+ * - Support JSON serialization
  * - Support chunked transfer encoding from clients
  */
 class HttpServer {
@@ -202,8 +206,8 @@ class HttpServer {
     private const uint maxRequestSize = 4096;
     private const Duration requestTimeout = dur!"seconds"(5);
 
-    // Request handlers
-    private RequestHandler[string] getHandlers;
+    // Request handlers (method -> path -> callback)
+    private RequestHandler[string][string] handlers;
 
     /**
      * Create server and start listening.
@@ -331,8 +335,9 @@ class HttpServer {
         }
 
         // Find matching handler to create response
-        RequestHandler* handler = req.path in getHandlers;
+        RequestHandler* handler;
         Response res;
+        if (req.method in handlers) handler = req.path in handlers[req.method];
 
         // If there is no handler, return a not found error
         if (handler)
@@ -340,13 +345,35 @@ class HttpServer {
         else
             res = Response("Not found!", StatusCode.NotFound);
 
-        conn.socket.send(res.generate);
+        conn.socket.send(res.generate(req.method == "head"));
     }
 
     /**
      * Add a handler for GET requests.
      */
     void get(string path, RequestHandler handler) {
-        getHandlers[path] = handler;
+        handlers["get"][path] = handler;
+        handlers["head"][path] = handler;
+    }
+
+    /**
+     * Add a handler for POST requests.
+     */
+    void post(string path, RequestHandler handler) {
+        handlers["post"][path] = handler;
+    }
+
+    /**
+     * Add a handler for PUT requests.
+     */
+    void put(string path, RequestHandler handler) {
+        handlers["put"][path] = handler;
+    }
+
+    /**
+     * Add a handler for DELETE requests.
+     */
+    void del(string path, RequestHandler handler) {
+        handlers["delete"][path] = handler;
     }
 }

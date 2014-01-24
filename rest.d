@@ -123,8 +123,10 @@ class Request {
  */
 enum StatusCode {
     OK = 200,
+    BadRequest = 400,
     NotFound = 404,
-    InternalServerError = 500
+    InternalServerError = 500,
+    NotImplemented = 501
 }
 
 /**
@@ -141,14 +143,36 @@ struct Response {
         this.response = to!string(response);
         this.status = status;
     }
+
+    /**
+     * Create an empty response (for example appropriate for bad request).
+     */
+    this(StatusCode status) {
+        this.response = "";
+        this.status = status;
+    }
+
+    /**
+     * Turn the response into a HTTP response.
+     */
+    private string generate() {
+        string msg = "";
+
+        msg ~= "HTTP/1.1 " ~ to!string(status) ~ " Todo\r\n";
+        msg ~= "Content-Type: text/plain\r\n";
+        msg ~= "Content-Length: " ~ to!string(response.length) ~ "\r\n\r\n";
+        msg ~= response;
+
+        return msg;
+    }
 }
 
 /**
  * A single-threaded HTTP 1.1 server handling requests for specified callbacks.
  *
  * TODO:
- * - Add Response object for properly building response
  * - Support POST/HEAD/PUT/DELETE, return 501 for other types
+ * - Support gzip compression
  * - Support request body
  * - Support keep-alive (default unless Connection: close is specified)
  * - Support chunked transfer encoding from clients
@@ -288,19 +312,21 @@ class HttpServer {
         try {
             req = new Request(conn);
         } catch (Exception e) {
-            conn.socket.send("HTTP/1.1 400 Bad Request\r\n\r\n");
+            conn.socket.send(Response(StatusCode.BadRequest).generate);
             return;
         }
 
         // Find matching handler to create response
         RequestHandler* handler = req.path in getHandlers;
+        Response res;
 
-        if (handler) {
-            Response res = (*handler)(req);
-            conn.socket.send("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " ~ to!string(res.response.length) ~"\r\n\r\n" ~ res.response);
-        } else {
-            conn.socket.send("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 10\r\n\r\nNot found!");
-        }
+        // If there is no handler, return a not found error
+        if (handler)
+            res = (*handler)(req);
+        else
+            res = Response("Not found!", StatusCode.NotFound);
+
+        conn.socket.send(res.generate);
     }
 
     /**

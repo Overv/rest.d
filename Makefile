@@ -1,8 +1,8 @@
 CC = dmd
-#CFLAGS = -O
+CFLAGS = -g
 
 sample: sample.d rest.d
-	dmd sample.d rest.d
+	dmd $(CFLAGS) sample.d rest.d
 
 .PHONY: test clean
 test:

@@ -118,6 +118,14 @@ class Request {
     }
 
     /**
+     * Return true if the client accepts a gzip compressed response.
+     */
+    private bool acceptsGzip() {
+        return ("accept-encoding" in headers) &&
+               headers["accept-encoding"].indexOf("gzip") != -1;
+    }
+
+    /**
      * Checks if a buffer contains a complete request.
      */
     private static bool isCompleteRequest(ubyte[] buffer) {
@@ -175,22 +183,53 @@ struct Response {
 
     /**
      * Turn the response into a HTTP response.
+     *
+     * The request is used to determine how to create a response, for example if
+     * gzip compression can be used. The default value of null should only be
+     * used in case of a bad request, where no object is available.
      */
-    private string generate(bool head = false) {
+    private string generate(Request req = null) {
         string msg = "";
 
         msg ~= "HTTP/1.1 " ~ to!string(cast(int) status) ~ " " ~ statusText(status) ~ "\r\n";
+        msg ~= "Connection: close\r\n";
+        msg ~= "Server: rest.d\r\n";
         msg ~= "Content-Type: text/plain\r\n";
 
         // If request was HEAD, don't send response body
-        if (!head && response.length > 0) {
-            msg ~= "Content-Length: " ~ to!string(response.length) ~ "\r\n\r\n";
-            msg ~= response;
+        if ((req is null || req.method != "head") && response.length > 0) {
+            // Prepare a compressed response if the client accepts it
+            ubyte[] compressed;
+            if (req.acceptsGzip) {
+                compressed = gzip(cast(ubyte[]) response);
+            }
+
+            // Send the compressed response only if it's actually smaller
+            if (compressed.length > 0 && compressed.length < response.length) {
+                msg ~= "Content-Encoding: gzip\r\n";
+                msg ~= "Content-Length: " ~ to!string(compressed.length) ~ "\r\n\r\n";
+                msg ~= compressed;
+            } else {
+                msg ~= "Content-Length: " ~ to!string(response.length) ~ "\r\n\r\n";
+                msg ~= response;
+            }
         } else {
             msg ~= "\r\n";
         }
 
         return msg;
+    }
+
+    /**
+     * Compress data with gzip with maximum compression (level 9).
+     */
+    private static ubyte[] gzip(ubyte[] data) {
+        Compress c = new Compress(9, HeaderFormat.gzip);
+
+        ubyte[] compressed = cast(ubyte[]) c.compress(data);
+        compressed ~= cast(ubyte[]) c.flush;
+
+        return compressed;
     }
 }
 
@@ -198,7 +237,6 @@ struct Response {
  * A single-threaded HTTP 1.1 server handling requests for specified callbacks.
  *
  * TODO:
- * - Support gzip compression
  * - Support adding headers to response
  * - Support request body
  * - Support keep-alive (default unless Connection: close is specified)
@@ -361,7 +399,7 @@ class HttpServer {
             res = Response("Not found!", Status.NotFound);
         }
 
-        conn.socket.send(res.generate(req.method == "head"));
+        conn.socket.send(res.generate(req));
     }
 
     /**

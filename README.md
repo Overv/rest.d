@@ -22,18 +22,16 @@ void main() {
 }
 ```
 
-*Note that it is also still very early in development and is only intended for
-use at a small, local scale right now.*
+*Disclaimer: Still early in development and not ready for production use yet.*
 
 Features
 --------
 
 - Small, straightforward API
-- Just a single file
+- Just a small single file
 - Asynchronous I/O for low resource usage
-- Single or multi-threaded request handling
-- Blocking loop to handle requests is optional
-- Automatically converts D objects to JSON
+- Manual event loop is possible to allow for background tasks or multiple
+servers without any multithreading
 
 License
 -------

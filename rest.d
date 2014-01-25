@@ -5,15 +5,10 @@
 
 module rest;
 
-import std.socket;
-import std.container;
-import std.datetime;
-import std.array;
-import std.string;
-import std.conv;
-import std.regex;
-import std.zlib;
-import std.uri;
+import std.socket, std.uri, std.zlib;
+import std.container, std.datetime;
+import std.array, std.string, std.conv, std.regex;
+import std.traits;
 
 /**
  * Request handler function.
@@ -156,7 +151,7 @@ enum Status {
 /**
  * Get the text corresponding to a status code.
  */
-private  string statusText(Status code) {
+private string statusText(Status code) {
     switch (code) {
         case Status.OK: return "OK";
         case Status.BadRequest: return "Bad Request";
@@ -287,7 +282,6 @@ struct Response {
  * A single-threaded HTTP 1.1 server handling requests for specified callbacks.
  *
  * TODO:
- * - Support JSON serialization
  * - Support request body
  * - Support chunked transfer encoding from clients
  */

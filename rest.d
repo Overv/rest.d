@@ -50,6 +50,9 @@ class Request {
     // Request body, length 0 if there is none
     ubyte[] rawBody;
 
+    // Body parsed into key/values, empty if there is no (form) data
+    string[string] form;
+
     // Complete if there's no body or complete body was received
     private bool complete;
 
@@ -85,26 +88,7 @@ class Request {
 
         // Parse query variables
         auto q = match(fullPath, queryRegex);
-
-        if (q) {
-            string[] pairs = q.captures[1].split("&");
-
-            foreach (string pair; pairs) {
-                string[] parts = pair.split("=");
-
-                // Accept formats a=b/a=b=c=d/a
-                if (parts.length == 1) {
-                    string key = decode(parts[0]);
-
-                    query[key] = "";
-                } else if (parts.length > 1) {
-                    string key = decode(parts[0]);
-                    string value = decode(pair[parts[0].length + 1..$]);
-
-                    query[key] = value;
-                }
-            }
-        }
+        if (q) query = parseKeyValues(q.captures[1]);
 
         // Parse headers
         foreach (string line; lines[1..$]) {
@@ -144,6 +128,12 @@ class Request {
             // Entire body has been received
             if (conn.buffer.length == bodyStart + bodyLength) {
                 rawBody = conn.buffer[bodyStart..$];
+
+                // If it contains key-value pairs, parse those
+                if ("content-type" in headers && headers["content-type"] == "application/x-www-form-urlencoded") {
+                    form = parseKeyValues(cast(string) rawBody);
+                }
+
                 complete = true;
             } else {
                 complete = false;
@@ -151,6 +141,33 @@ class Request {
         } else {
             complete = true;
         }
+    }
+
+    /**
+     * Parse url encoded key/value pairs into an associative array.
+     */
+    private string[string] parseKeyValues(string raw) {
+        string[string] map;
+
+        string[] pairs = raw.strip.split("&");
+
+        foreach (string pair; pairs) {
+            string[] parts = pair.split("=");
+
+            // Accept formats a=b/a=b=c=d/a
+            if (parts.length == 1) {
+                string key = decode(parts[0]);
+
+                map[key] = "";
+            } else if (parts.length > 1) {
+                string key = decode(parts[0]);
+                string value = decode(pair[parts[0].length + 1..$]);
+
+                map[key] = value;
+            }
+        }
+
+        return map;
     }
 
     /**
@@ -329,7 +346,7 @@ class HttpServer {
     private auto connections = new RedBlackTree!(Connection, "a.id > b.id");
 
     // Limited by FD_SETSIZE
-    private uint maxConnections = (new SocketSet).max;
+    private const uint maxConnections = (new SocketSet).max;
 
     // Configuration
     private const uint maxRequestSize = 4096;
@@ -428,7 +445,7 @@ class HttpServer {
                     } else {
                         conn.buffer ~= buf[0..len];
 
-                        // If request is too large, drop conn
+                        // If request is too large, drop client
                         if (conn.buffer.length > maxRequestSize) {
                             conn.socket.close();
                             closedConnections.insert(conn);

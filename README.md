@@ -8,7 +8,6 @@ It is really easy to use:
 
 ```d
 import rest;
-
 import std.datetime;
 
 void main() {
@@ -22,19 +21,19 @@ void main() {
 }
 ```
 
-*Disclaimer: Still early in development and not ready for production use yet.*
-
 Features
 --------
 
-- Small, straightforward API
-- Just a small single file
+- Small, straightforward and fully documented API
+- Single file as dependency
 - Asynchronous I/O for low resource usage
-- Manual event loop is possible to allow for background tasks or multiple
-servers without any multithreading
+- Manual `iterate()` to do background tasks or multiple servers without any
+multithreading
 
 License
 -------
+
+Revised BSD License:
 
     Copyright (c) 2014, Alexander Overvoorde
     All rights reserved.

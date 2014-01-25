@@ -26,11 +26,12 @@ alias Response function(Request) RequestHandler;
 private class Connection {
     Socket socket;
     ubyte[] buffer;
-    SysTime start;
+    SysTime start, last;
 
     this(Socket socket) {
         this.socket = socket;
         this.start = Clock.currTime;
+        this.last = start;
     }
 
     socket_t id() {
@@ -126,6 +127,14 @@ class Request {
     }
 
     /**
+     * Return true if the client wants to use a persistent connection.
+     */
+    private bool keepAlive() {
+        return !("connection" in headers) ||
+               headers["connection"].toLower != "close";
+    }
+
+    /**
      * Checks if a buffer contains a complete request.
      */
     private static bool isCompleteRequest(ubyte[] buffer) {
@@ -208,14 +217,19 @@ struct Response {
      * used in case of a bad request, where no object is available.
      */
     private string generate(Request req = null) {
-        headers["connection"] = "close";
+        // Check if a persistent connection is desired
+        if (!(req is null) && req.keepAlive) {
+            headers["connection"] = "Keep-Alive";
+        } else {
+            headers["connection"] = "close";
+        }
 
         // Only send a response body if the request wasn't HEAD
         string content = "";
         if ((req is null || req.method != "head") && response.length > 0) {
             // Prepare a compressed response if the client accepts it
             ubyte[] compressed;
-            if (req.acceptsGzip) {
+            if (!(req is null) && req.acceptsGzip) {
                 compressed = gzip(cast(ubyte[]) response);
             }
 
@@ -273,7 +287,6 @@ struct Response {
  * A single-threaded HTTP 1.1 server handling requests for specified callbacks.
  *
  * TODO:
- * - Support keep-alive (default unless Connection: close is specified)
  * - Support JSON serialization
  * - Support request body
  * - Support chunked transfer encoding from clients
@@ -287,7 +300,8 @@ class HttpServer {
 
     // Configuration
     private const uint maxRequestSize = 4096;
-    private const Duration requestTimeout = dur!"seconds"(5);
+    private const Duration keepAliveTimeout = dur!"seconds"(60);
+    private const Duration requestTimeout = dur!"seconds"(60);
 
     // Request handlers (method -> path -> callback)
     private RequestHandler[string][string] handlers;
@@ -351,8 +365,9 @@ class HttpServer {
         foreach (Connection conn; connections) {
             // Clean up closed sockets
             if (conn.socket.isAlive) {
-                // Drop connection if no complete request was sent in time
-                if (t - conn.start > requestTimeout) {
+                // Drop connection if no complete request was sent in time or if
+                // the connection has been kept alive too long.
+                if (t - conn.last > requestTimeout || t - conn.start > keepAliveTimeout) {
                     conn.socket.close();
                     closedConnections.insert(conn);
                 } else {
@@ -388,10 +403,16 @@ class HttpServer {
 
                         // Handle request if buffer contains full request
                         if (Request.isCompleteRequest(conn.buffer)) {
-                            handleRequest(conn);
+                            bool keepAlive = handleRequest(conn);
 
-                            conn.socket.close();
-                            closedConnections.insert(conn);
+                            if (!keepAlive) {
+                                conn.socket.close();
+                                closedConnections.insert(conn);
+                            } else {
+                                // Reset state for next request
+                                conn.last = Clock.currTime;
+                                conn.buffer.length = 0;
+                            }
                         }
                     }
                 }
@@ -406,15 +427,16 @@ class HttpServer {
 
     /**
      * Respond to a request sent by a client.
+     * Returns true if the connection should remain open (keep alive).
      */
-    private void handleRequest(Connection conn) {
-        // Attempt to parse request
+    private bool handleRequest(Connection conn) {
+        // Attempt to parse request, bad request means closing the connection
         Request req;
         try {
             req = new Request(conn);
         } catch (Exception e) {
             conn.socket.send(Response(Status.BadRequest).generate);
-            return;
+            return false;
         }
 
         // Find matching handler to create response
@@ -434,7 +456,11 @@ class HttpServer {
             res = Response("Not found!", Status.NotFound);
         }
 
+        // Send the response to the client
         conn.socket.send(res.generate(req));
+
+        // Depending on the request, keep the connection open
+        return req.keepAlive;
     }
 
     /**

@@ -5,10 +5,9 @@
 
 module rest;
 
-import std.socket, std.uri, std.zlib;
 import std.container, std.datetime;
+import std.socket, std.uri, std.zlib;
 import std.array, std.string, std.conv, std.regex;
-import std.traits;
 
 /**
  * Request handler function.
@@ -48,20 +47,30 @@ class Request {
     // Field names are always lower case, e.g. content-length
     string[string] headers;
 
+    // Request body, length 0 if there is none
+    ubyte[] rawBody;
+
+    // Complete if there's no body or complete body was received
+    private bool complete;
+
     private static enum requestLineRegex = ctRegex!(`^(GET|POST|PUT|DELETE|HEAD) (/[^ ]*) HTTP/1\.1$`);
     private static enum pathRegex = ctRegex!(`^/([^?#]*)`);
     private static enum queryRegex = ctRegex!(`^/[^?]*\?([^#]*)`);
 
     /**
-     * Parse raw request into a structure.
+     * Parse (partial) request into a structure.
      * Throws: Exception on bad request.
+     *
+     * Note that an exception is only thrown if the request so far already
+     * contains errors. Check isComplete to see if the request is actually
+     * ready for processing.
      */
     private this(Connection conn) {
         string raw = cast(string) conn.buffer;
-        string[] lines = raw.split("\r\n");
+        string[] lines = raw.splitLines();
 
-        // Request line, host header and empty line (splits to 4)
-        enforce(lines.length >= 4, "Incomplete request");
+        // Request line, host header and empty line
+        enforce(lines.length >= 3, "Incomplete request");
 
         // Parse request line
         auto reqLine = match(lines[0], requestLineRegex);
@@ -98,7 +107,9 @@ class Request {
         }
 
         // Parse headers
-        foreach (string line; lines[1..$-2]) {
+        foreach (string line; lines[1..$]) {
+            if (line.length == 0) break;
+
             string[] parts = line.split(":");
 
             enforce(parts.length >= 2, "Malformed header line");
@@ -111,6 +122,35 @@ class Request {
 
         // HTTP/1.1 requires the Host header
         enforce("host" in headers, "Missing required Host header");
+
+        // If there's a Content-Length header, check if its value is a number
+        long bodyLength = 0;
+
+        if ("content-length" in headers) {
+            try {
+                bodyLength = to!long(headers["content-length"]);
+            } catch (ConvException e) {
+                throw new Exception("Content length isn't numeric");
+            }
+        }
+
+        // Read body if fully received
+        if (bodyLength > 0) {
+            long bodyStart = (cast(string) conn.buffer).indexOf("\r\n\r\n") + 4;
+
+            // Make sure the buffer only contains the request and the body
+            enforce(conn.buffer.length <= bodyStart + bodyLength, "Too much data sent");
+
+            // Entire body has been received
+            if (conn.buffer.length == bodyStart + bodyLength) {
+                rawBody = conn.buffer[bodyStart..$];
+                complete = true;
+            } else {
+                complete = false;
+            }
+        } else {
+            complete = true;
+        }
     }
 
     /**
@@ -130,10 +170,10 @@ class Request {
     }
 
     /**
-     * Checks if a buffer contains a complete request.
+     * Return true if the entire request, including any body, has been received.
      */
-    private static bool isCompleteRequest(ubyte[] buffer) {
-        return buffer.length >= 4 && buffer[$-4..$] == "\r\n\r\n";
+    private bool isComplete() {
+        return complete;
     }
 }
 
@@ -214,7 +254,7 @@ struct Response {
     private string generate(Request req = null) {
         // Check if a persistent connection is desired
         if (!(req is null) && req.keepAlive) {
-            headers["connection"] = "Keep-Alive";
+            headers["connection"] = "keep-alive";
         } else {
             headers["connection"] = "close";
         }
@@ -282,7 +322,6 @@ struct Response {
  * A single-threaded HTTP 1.1 server handling requests for specified callbacks.
  *
  * TODO:
- * - Support request body
  * - Support chunked transfer encoding from clients
  */
 class HttpServer {
@@ -294,8 +333,8 @@ class HttpServer {
 
     // Configuration
     private const uint maxRequestSize = 4096;
-    private const Duration keepAliveTimeout = dur!"seconds"(60);
-    private const Duration requestTimeout = dur!"seconds"(60);
+    private const Duration keepAliveTimeout = dur!"seconds"(5);
+    private const Duration requestTimeout = dur!"seconds"(5);
 
     // Request handlers (method -> path -> callback)
     private RequestHandler[string][string] handlers;
@@ -395,8 +434,8 @@ class HttpServer {
                             closedConnections.insert(conn);
                         }
 
-                        // Handle request if buffer contains full request
-                        if (Request.isCompleteRequest(conn.buffer)) {
+                        // Handle request if client has sent a complete one
+                        if (hasCompleteRequest(conn)) {
                             bool keepAlive = handleRequest(conn);
 
                             if (!keepAlive) {
@@ -417,6 +456,25 @@ class HttpServer {
         foreach (Connection conn; closedConnections) {
             connections.removeKey(conn);
         }
+    }
+
+    /**
+     * Check if a client has sent a complete request.
+     */
+    private static bool hasCompleteRequest(Connection conn) {
+        // If not all headers have been received yet, continue waiting
+        if ((cast(string) conn.buffer).indexOf("\r\n\r\n") == -1) return false;
+
+        // Otherwise parse (partial) request to check if it's complete
+        Request req;
+        try {
+            req = new Request(conn);
+        } catch (Exception e) {
+            // Bad request should be handled now
+            return true;
+        }
+
+        return req.isComplete;
     }
 
     /**

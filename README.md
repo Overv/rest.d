@@ -9,7 +9,6 @@ It is really easy to use:
 ```d
 import rest;
 
-import std.conv;
 import std.datetime;
 
 void main() {

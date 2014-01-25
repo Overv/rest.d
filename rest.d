@@ -164,6 +164,7 @@ private  string statusText(Status code) {
 struct Response {
     private string response = "";
     private Status status = Status.OK;
+    private string[string] headers;
 
     /**
      * Create a response by serializing an object to a string with to!string.
@@ -171,14 +172,32 @@ struct Response {
     this(T)(T response, Status status = Status.OK) {
         this.response = to!string(response);
         this.status = status;
+
+        // Default values for headers that may be overwritten
+        headers["server"] = "rest.d";
+        headers["content-type"] = "text/plain";
     }
 
     /**
      * Create an empty response (for example appropriate for bad request).
      */
     this(Status status) {
-        this.response = "";
-        this.status = status;
+        this("", status);
+    }
+
+    /**
+     * Add a header to the response or change its value.
+     *
+     * Silently fails for headers like Content-Length, Content-Encoding
+     * and Connection, which affect framework operations (later overriden).
+     * Note that the name is capitalized automatically, so cONTENT-lEnGth
+     * becomes Content-Length.
+     */
+    void setHeader(string name, string value) {
+        enforce(name.indexOf(":") == -1 && name.indexOf(" ") == -1, "Header name invalid");
+        enforce(value.strip.length > 0, "Header value may not be empty");
+
+        headers[name.toLower] = value;
     }
 
     /**
@@ -189,14 +208,10 @@ struct Response {
      * used in case of a bad request, where no object is available.
      */
     private string generate(Request req = null) {
-        string msg = "";
+        headers["connection"] = "close";
 
-        msg ~= "HTTP/1.1 " ~ to!string(cast(int) status) ~ " " ~ statusText(status) ~ "\r\n";
-        msg ~= "Connection: close\r\n";
-        msg ~= "Server: rest.d\r\n";
-        msg ~= "Content-Type: text/plain\r\n";
-
-        // If request was HEAD, don't send response body
+        // Only send a response body if the request wasn't HEAD
+        string content = "";
         if ((req is null || req.method != "head") && response.length > 0) {
             // Prepare a compressed response if the client accepts it
             ubyte[] compressed;
@@ -206,18 +221,39 @@ struct Response {
 
             // Send the compressed response only if it's actually smaller
             if (compressed.length > 0 && compressed.length < response.length) {
-                msg ~= "Content-Encoding: gzip\r\n";
-                msg ~= "Content-Length: " ~ to!string(compressed.length) ~ "\r\n\r\n";
-                msg ~= compressed;
+                headers["content-encoding"] = "gzip";
+                headers["content-length"] = to!string(compressed.length);
+                content = cast(string) compressed;
             } else {
-                msg ~= "Content-Length: " ~ to!string(response.length) ~ "\r\n\r\n";
-                msg ~= response;
+                headers["content-length"] = to!string(response.length);
+                content = response;
             }
-        } else {
-            msg ~= "\r\n";
         }
 
+        // Compose message
+        string msg = "HTTP/1.1 " ~ to!string(cast(int) status) ~ " " ~ statusText(status) ~ "\r\n";
+
+        foreach (string name, value; headers) {
+            msg ~= capitalizeHeader(name) ~ ": " ~ value ~ "\r\n";
+        }
+
+        msg ~= "\r\n";
+        msg ~= content;
+
         return msg;
+    }
+
+    /**
+     * Capitalize a header name properly.
+     */
+    private static string capitalizeHeader(string name) {
+        string[] parts = name.split("-");
+
+        for (int i = 0; i < parts.length; i++) {
+            parts[i] = parts[i].capitalize;
+        }
+
+        return join(parts, "-");
     }
 
     /**
@@ -237,10 +273,9 @@ struct Response {
  * A single-threaded HTTP 1.1 server handling requests for specified callbacks.
  *
  * TODO:
- * - Support adding headers to response
- * - Support request body
  * - Support keep-alive (default unless Connection: close is specified)
  * - Support JSON serialization
+ * - Support request body
  * - Support chunked transfer encoding from clients
  */
 class HttpServer {

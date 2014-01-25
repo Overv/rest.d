@@ -1,6 +1,5 @@
 import rest;
 
-import std.conv;
 import std.datetime;
 
 void main() {

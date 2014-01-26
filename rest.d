@@ -294,6 +294,8 @@ struct Response {
                 headers["content-length"] = to!string(response.length);
                 content = response;
             }
+        } else {
+            headers["content-length"] = "0";
         }
 
         // Compose message
